@@ -1,0 +1,352 @@
+#!/usr/bin/env RScript
+library(ggfortify)
+library(ggplot2)
+library(factoextra)
+library(GGally)
+library(pca3d)
+library(cluster)
+library(bpca)
+
+#################
+### FUNCTIONS ###
+#################
+
+render_to_github <- function() {
+  # Renders the project to markdown for github
+  library(rstudioapi)
+  library(rmarkdown)
+  render("Assgnmt3.Rmd", md_document(variant = "markdown_github"), output_file = "README.md")
+}
+
+scree_plot <- function(pca, num.pc = 7) {
+  # takes a pca object from prcomp and plots the scree using ggplot
+
+  # find PC explained variance
+  df <- data.frame(comp = paste0("PC", 1:dim(pca$x)[2]), vare = 100 * (pca$sdev) ^ 2 / sum((pca$sdev) ^ 2))
+  ggplot(data = df[1:num.pc,], aes(x = comp, y = vare, group = 1)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    xlab("Component") +
+    ylab("% of Variance Explained") +
+    geom_text(aes(label = round(vare, digits = 2)), vjust = -0.25, color = "black", size = 3.5) +
+    expand_limits(y = max(df$vare * 1.15)) # prevent numbers from being cut off
+}
+
+clus_plot <- function(data, groups, clusters) {
+  # plots the pca with groups as shapes, and clusters as frames
+
+  # PCA of data
+  pca <- prcomp(data, scale. = TRUE)
+
+  # Combine groups and clusters into df
+  df <- cbind(groups, as.factor(clusters), data)
+  row.names(df) <- 1:dim(data)[1]
+  names(df) <- c("GROUP", "CLUS", names(data))
+
+  # plot
+  autoplot(pca, data = df, colour = "CLUS", shape = "GROUP", size = 3, frame = TRUE)
+}
+
+#################
+### PROBLEM 1 ###
+#################
+
+#!/usr/bin/env RScript
+
+## Load data
+load("data/geneexpression1.rda")
+
+# Add data to one data set
+p1.df.all <- cbind(tab, as.data.frame(t(e)))
+
+## TRANPOSED DATA ##
+
+# PCA
+p1.pca1 <- prcomp(p1.df.all[-1:-7], scale. = TRUE)
+p1.pca1.unscaled <- prcomp(p1.df.all[-1:-7], scale. = FALSE)
+
+# 2d Plot
+p1.ap1 <- autoplot(p1.pca1, data = p1.df.all, colour = 'SubType', shape = "Tissue", size = 3) +
+  labs(colour = "Cell Type") + #scale_shape_manual(values = 0:6)
+scale_shape_manual(values = LETTERS)
+
+p1.ap1.unscaled <- autoplot(p1.pca1.unscaled, data = p1.df.all, colour = 'SubType', shape = "Tissue", size = 3) +
+  labs(colour = "Cell Type") + #scale_shape_manual(values = 0:6)
+scale_shape_manual(values = LETTERS)
+
+# Biplot
+pca2d(p1.pca1, biplot = TRUE)
+pca2d(p1.pca1.unscaled, biplot = TRUE)
+
+# 3D plot 
+pca3d(p1.pca1.unscaled, group = p1.df.all[, 4])
+pca3d(p1.pca1, group = p1.df.all[, 4])
+
+# scree plot
+p1.sp1.unscaled <- scree_plot(p1.pca1.unscaled, 7)
+p1.sp1 <- scree_plot(p1.pca1, 7)
+
+## UNTRANSPOSED DATA ##
+
+# Same thing but with the data untransposed
+p1.pca2 <- prcomp(t(p1.df.all[-1:-7]), scale. = TRUE)
+p1.pca2.unscaled <- prcomp(t(p1.df.all[-1:-7]), scale. = FALSE)
+p1.ap2 <- autoplot(p1.pca2)
+p1.ap2.unscaled <- autoplot(p1.pca2.unscaled)
+p1.sp2 <- scree_plot(p1.pca2, 9)
+p1.sp2.unscaled <- scree_plot(p1.pca2.unscaled, 9)
+
+pca3d(p1.pca2)
+pca3d(p1.pca2.unscaled)
+
+pca2d(p1.pca2, biplot = TRUE)
+pca2d(p1.pca2.unscaled, biplot = TRUE)
+
+#################
+### PROBLEM 2 ###
+#################
+
+#!/usr/bin/env RScript
+
+# Rows are samples. 
+load("data/geneexpression2.rda")
+
+# Create a data frame from parsed row labels
+p2.df.all <- cbind(
+  as.data.frame(substr(row.names(dat), 1, 3)),
+  as.data.frame(sapply(strsplit(row.names(dat), "_"), `[`, 2)),
+  as.data.frame(dat)
+)
+names(p2.df.all) <- c("STATUS", "CELL", names(dat))
+
+# Run PCA and plot
+p2.pca1 <- prcomp(p2.df.all[-1:-2], scale. = TRUE)
+p2.ap1 <- autoplot(p2.pca1, data = p2.df.all, colour = "CELL", shape = "STATUS", size = 3)
+
+pca3d(p2.pca1)
+pca2d(p2.pca1, biplot = TRUE)
+
+p2.sp1 <- scree_plot(p2.pca1, 9)
+
+#################
+### PROBLEM 3 ###
+#################
+
+
+#!/usr/bin/env RScript
+
+#*******************************************************
+##			CLUSTERING of T-cell gene expression DATA
+#*******************************************************
+
+# Continuing from problem 2...
+p3.df.all <- p2.df.all
+p3.df.all$STATUS <- paste(p2.df.all$STATUS, p2.df.all$CELL, sep = "_")
+
+##=============================
+## Prepare the data
+##=============================
+
+raw.data <- as.matrix(p3.df.all[, - c(1:2)]) ## extract just the variables
+rownames(raw.data) <- 1:dim(p3.df.all)[1]
+
+raw.new <- raw.data;
+rownames(raw.new) = as.character(p3.df.all[, 1])
+
+scale.genes <- scale(raw.data) # standardized data with cell status
+scale.genes.1 <- scale(raw.new) # standardized data with genes
+
+
+### Visualize the matrix amd check by relationships based on similarity 
+
+## For columns (genes)
+p3.hm1 <- fviz_dist(as.dist(cor(scale.genes)), gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+## For rows (cell satus)
+p3.hm2 <- fviz_dist(dist(scale.genes.1), gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+
+# 2D Biplot
+p3.bp1 <- biplot(prcomp(scale.genes.1, scale = F), main = "Biplot by T-cells")
+
+# Scree Plot of Gene Expressions of Different T-Cells
+p3.sp1 <- scree_plot(prcomp(scale.genes, scale = FALSE))
+
+
+plot(bpca(as.data.frame(scale.genes),
+          method = 'hj',
+          d = 1:3),
+     rgl.use = TRUE,
+     var.col = 'brown',
+     var.factor = .3,
+     var.cex = 1.2,
+     obj.names = TRUE,
+     obj.cex = .8,
+     obj.col = c('red', 'green3', 'orange')[p3.df.all[, 2]],
+     simple.axes = FALSE,
+     box = TRUE)
+
+
+##=============================
+######### Hierarchical Clustering
+##=============================
+
+##### Here two methods for hierarchical clustering have been conducted. Which as agnes and diana
+
+#This is creates a dendogram using the agnes method and bases the tip labels on genes 
+p3.dg1 <- plot(agnes(abs(cor(scale.genes)), method = "single"), main = "Gene Dendogram", which.plots = 2)
+#This is creates a dendogram using the agnes method and bases the tip labels on the cell status
+p3.dg2 <- plot(agnes(dist(scale.genes.1), method = "single"), main = "Dendogram based on Cell Status using Agnes"
+     , which.plots = 2)
+#This is creates a dendogram using the diana method and bases the tip labels on the cell status
+p3.dg3 <- plot(diana(dist(scale.genes.1)), which.plots = 2, main = "Dendogram based on Cell Status using Diana")
+#This is creates a dendogram using the diana method and bases the tip labels on genes
+p3.dg4 <- plot(diana(as.dist(cor(scale.genes))), which.plots = 2, main = "Dendogram based on Cell Status using Diana")
+
+##=============================
+######### Non - Hierarchial Clustering
+##=============================
+
+### Two methods for Non-Hierarchial clustering have been selected. K-means and pam. Pam is a more robust version of k-means
+
+# First conduct a cluster validation function. This shows what is the optimum number of clusters. It shows that it possibly is 3. However we will explore 2 and 4 cluster formation as well. 
+
+# Elbow method
+p3.nb1 <- fviz_nbclust(scale.genes, pam, method = "wss") +
+  geom_vline(xintercept = 3, linetype = 2)
+
+p3.nb2 <- fviz_nbclust(scale.genes.1, kmeans, method = "wss") +
+  geom_vline(xintercept = 3, linetype = 2)
+
+##==================================
+######### k-Medoids for 2,3,4
+##==================================
+
+New.scale.genes = cmdscale(dist(scale.genes.1))
+
+med2 <- pam(New.scale.genes, 2)
+med3 <- pam(New.scale.genes, 3)
+med4 <- pam(New.scale.genes, 4)
+x = kmeans(scale.genes, 2)
+
+##==================================
+######### k-Means for 2,3,4
+##==================================
+
+cl2 <- kmeans(New.scale.genes, 2)
+cl3 <- kmeans(New.scale.genes, 3)
+cl4 <- kmeans(New.scale.genes, 4)
+kpam2 <- pam(New.scale.genes, 2) # develop medoids only for ability to plot kmeans
+kpam3 <- pam(New.scale.genes, 3)
+kpam4 <- pam(New.scale.genes, 4)
+
+kpam2$medoids <- cl2$centers # this is done to make it possible to plot kmeans
+kpam2$clustering <- cl2$cluster
+kpam3$medoids <- cl3$centers
+kpam3$clustering <- cl3$cluster
+kpam4$medoids <- cl4$centers
+kpam4$clustering <- cl4$cluster
+
+##==========================================
+######### Plot means and medoids together
+##==========================================
+
+#### These functions do not work as princomp imbedded in the function
+
+p3.cl1 <- clusplot(kpam2, labels = 2, main = "2-means")
+p3.cl2 <- clusplot(med2, labels = 2, sub = '', main = "2-medoids")
+
+p3.cl3 <- clusplot(kpam3, labels = 2, sub = '', main = "3-means")
+p3.cl4 <- clusplot(med3, labels = 2, sub = '', main = "3-medoids")
+
+p3.cl5 <- clusplot(kpam4, labels = 2, sub = '', main = "4-means")
+p3.cl6 <- clusplot(med4, labels = 2, sub = '', main = "4-medoids")
+
+##==========================================
+######### k-Means vs medoids Optimum
+##==========================================
+
+p3.cl7 <- clusplot(kpam3, labels = 3, sub = '', main = "3-means") # Plot means
+p3.cl8 <- clusplot(med3, labels = 2, sub = '', main = "3-medoids") # Plot medoids
+
+# Overlay clusters onto the PCA plot from problem 2.
+p3.cl.gg1 <- clus_plot(dat, p3.df.all$STATUS, kpam3$clustering)
+
+##========================================================================
+######### Cluster Labels for Non-Hierarchal Clustering Results
+##========================================================================
+
+med2$clustering
+table(med2$clustering) ## two clusters - produce these tables for the following as well.
+med3$clustering
+table(med3$clustering)
+med4$clustering
+cl2$cluster
+cl3$cluster
+cl4$cluster
+
+
+##==================================
+######### Gene clustering
+##==================================
+
+##==================================
+######### k-Medoids for 2,3,4
+##==================================
+
+Cluster.genes = cmdscale(as.dist(cor(scale.genes)))
+
+med2 <- pam(Cluster.genes, 2)
+med3 <- pam(Cluster.genes, 3)
+med4 <- pam(Cluster.genes, 4)
+
+##==================================
+######### k-Means for 2,3,4
+##==================================
+
+cl2 <- kmeans(Cluster.genes, 2)
+cl3 <- kmeans(Cluster.genes, 3)
+cl4 <- kmeans(Cluster.genes, 4)
+kpam2 <- pam(Cluster.genes, 2) # develop medoids only for ability to plot kmeans
+kpam3 <- pam(Cluster.genes, 3)
+kpam4 <- pam(Cluster.genes, 4)
+
+kpam2$medoids <- cl2$centers # this is done to make it possible to plot kmeans
+kpam2$clustering <- cl2$cluster
+kpam3$medoids <- cl3$centers
+kpam3$clustering <- cl3$cluster
+kpam4$medoids <- cl4$centers
+kpam4$clustering <- cl4$cluster
+
+##==========================================
+######### Plot means and medoids together
+##==========================================
+
+#### These functions do not work as princomp imbedded in the function
+
+par(mfrow = c(3, 2))
+clusplot(kpam2, labels = 2, main = "2-means")
+clusplot(med2, labels = 2, sub = '', main = "2-medoids")
+
+clusplot(kpam3, labels = 2, sub = '', main = "3-means")
+clusplot(med3, labels = 2, sub = '', main = "3-medoids")
+
+clusplot(kpam4, labels = 2, sub = '', main = "4-means")
+clusplot(med4, labels = 2, sub = '', main = "4-medoids")
+
+##==========================================
+######### k-Means vs medoids Optimum
+##==========================================
+
+par(mfrow = c(1, 2))
+clusplot(kpam3, labels = 3, sub = '', main = "3-means Cluster based on Genes") # Plot means
+clusplot(med3, labels = 2, sub = '', main = "3-medoids Cluster based on Genes") # Plot medoids
+
+
+
+# Finally a heat map has been done
+p3.hm3 <- heatmap(scale.genes.1, scale = "none")
+
+
+# Find which features contribute the most
+contr <- get_pca(prcomp(scale.genes.1, scale = F), element = c("var", "ind"))
+View(contr$contrib)
